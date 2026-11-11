@@ -185,6 +185,21 @@ parentheses and apostrophes, and preserves Unicode file and folder names
 (including Chinese). Directory links expand as folders; their contents load
 only when expanded.
 
+The status bar shows remaining Claude and Codex subscription usage for the local
+CLI accounts, even in remote workspaces. Hover a provider for every reported
+limit and its reset time; click it, or focus it and press Enter, to open
+details with a Refresh button (at least 10 seconds between attempts).
+Arrow, Page Up/Down, Home and End keys scroll details; Escape closes them.
+Narrow windows show the tightest limit.
+Active windows refresh about every 10 minutes and back off after failures.
+Passed reset times show no percentage until a fresh reading arrives. Claude
+uses its current Keychain/config-directory sign-in; Codex is queried through
+its CLI app-server, using Bash on macOS/Linux and PowerShell on Windows.
+API/external authentication has no subscription reading.
+The mod does not change CLI settings or store credentials. Claude readings can
+remain marked stale after a service failure; changed sign-ins and failed Codex
+queries clear old numbers. Both providers show sign-in and connection failures.
+
 **Herdr's own layouts and mods are read-only.** They are replaced whole
 on every start. Use settings.json for look (fonts, sizes, theme, colors,
 sounds), where the layout leaves them unset. Herdr (main) has no look of

@@ -126,8 +126,11 @@ jobs:
         if: matrix.platform == 'linux-x86_64'
         run: python3 -m unittest discover -s scripts -p test_distribution.py
       - name: Install Bun
-        if: matrix.platform == 'linux-x86_64'
-        run: curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.4"
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - name: Check usage collection
+        run: bun test scripts/usage.test.ts
       - name: Check documentation
         if: matrix.platform == 'linux-x86_64'
         run: |
