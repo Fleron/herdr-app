@@ -484,6 +484,14 @@ The person and what they see come first; code only in Built from and
 Watch out. Exact over vague (`#ab7748`, 29px, `agent.focus`), and nothing
 the build doesn't do.
 
+The optional personal PR review package lives in the source distribution at
+`packages/pr-review/` (`RECIPE.md` and `README.md`). Its installer creates personal
+layout/tab-bar copies for a PRs panel beside Files/Changes; it is not a shipped
+panel. The `pull-requests` mod has list, review and composer roles. Its helper owns
+GitHub pagination, pinned checkouts, drafts and review receipts; only an explicit
+Submit publishes a review. Restore the recorded original layout to leave it;
+never reset its checkouts or retry an uncertain review write blindly.
+
 ## Keys: `keys.json`
 
 On upgrade, an untouched keys file from an earlier release gets the current
