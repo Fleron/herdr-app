@@ -50,6 +50,25 @@ def available(folder, stem, suffix=""):
     return candidate
 
 
+def tabs_with_prs(text, mod):
+    preferences = 'const enabled = shared("workspace.panels") ?? ["files", "changes"];'
+    availability = '''const configuredPanels = shared("workspace.panels") ?? ["files", "changes"];
+    const enabled = (body?.children ?? [])
+      .filter(child => child.id === "pull-requests" || configuredPanels.includes(child.id))
+      .map(child => child.id);'''
+    if text.count(preferences) == 1:
+        text = text.replace(preferences, availability)
+    elif text.count(availability) != 1:
+        raise RuntimeError("This tab-bar version has different panel preferences. It has not been changed.")
+    addition = f'.when(enabled.includes("pull-requests"), el => el.child(panelButton("pull-requests", "PRs", "mods/{mod}/git-pull-request-16.svg")))'
+    if text.count(addition) == 1:
+        return text
+    anchor = '.when(enabled.includes("changes"), el => el.child(panelButton("changes", "Changes", "mods/changes/changes.svg")))'
+    if text.count(anchor) != 1 or 'panelButton("pull-requests",' in text:
+        raise RuntimeError("This tab-bar version has a different panel structure. It has not been changed.")
+    return text.replace(anchor, anchor + "\n      " + addition)
+
+
 def install(app, source_layout):
     status = app.call("status")
     original_layout = status["layout"]
@@ -65,9 +84,7 @@ def install(app, source_layout):
     if not tabs_source:
         raise RuntimeError("This layout's tabs are not supplied by a mod. It has not been changed.")
     source_tabs = (app.home / "mods" / tabs_source / "main.js").read_text()
-    anchor = '.when(enabled.includes("changes"), el => el.child(panelButton("changes", "Changes", "mods/changes/changes.svg")))'
-    if source_tabs.count(anchor) != 1:
-        raise RuntimeError("This tab-bar version has a different panel structure. It has not been changed.")
+    tabs_with_prs(source_tabs, "pull-requests")
 
     subprocess.run(["cargo", "build", "--manifest-path", str(PACKAGE / "helper/Cargo.toml"), "--release", "--locked"], check=True)
     mod = available(app.home / "mods", "pull-requests")
@@ -93,11 +110,7 @@ def install(app, source_layout):
             raise RuntimeError(checked.stderr.strip() or checked.stdout.strip())
         app.do("mod.clone", name=tabs_source, **{"as": tabs_name})
         tabs_path = app.home / "mods" / tabs_name / "main.js"
-        text = tabs_path.read_text()
-        if text.count(anchor) != 1:
-            raise RuntimeError("Cloning changed the tab-bar structure; installation stopped.")
-        addition = f'.when(enabled.includes("pull-requests"), el => el.child(panelButton("pull-requests", "PRs", "mods/{mod}/git-pull-request-16.svg")))'
-        tabs_path.write_text(text.replace(anchor, anchor + "\n      " + addition))
+        tabs_path.write_text(tabs_with_prs(tabs_path.read_text(), mod))
         app.do("layout.clone", name=source_layout, **{"as": layout_name})
         switched = True
         layout_path = app.home / "layouts" / f"{layout_name}.json"

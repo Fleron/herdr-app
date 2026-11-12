@@ -502,8 +502,10 @@ the build doesn't do.
 The optional personal PR review package lives in the source distribution at
 `packages/pr-review/` (`RECIPE.md` and `README.md`). Its installer creates personal
 layout/tab-bar copies for a PRs panel beside Files/Changes; it is not a shipped
-panel. The `pull-requests` mod has list, review and composer roles. Its helper owns
-GitHub pagination, pinned checkouts, drafts and review receipts; only an explicit
+panel. Its PRs button follows the layout's panel slot; `workspace.panels` controls
+the built-in Files/Changes choices. The `pull-requests` mod has list, review and
+composer roles. Its helper owns GitHub pagination, pinned checkouts, drafts and
+review receipts; only an explicit
 Submit publishes a review. Restore the recorded original layout to leave it;
 never reset its checkouts or retry an uncertain review write blindly.
 
