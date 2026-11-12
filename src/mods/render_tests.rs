@@ -230,7 +230,13 @@ fn module(values: BTreeMap<String, Value>, calls: Rc<RefCell<Calls>>) -> HostMod
         module = module.async_function(name, move |a| {
             let first = a.get(0).map(from_host).unwrap_or(Value::Null);
             let reply = match name {
-                "readTextFile" if first == "/fixture/app/settings.json" || first == "/fixture/.ssh/config" => Some(Value::Null),
+                "readTextFile" if first == "/fixture/app/settings.json" || first == "/fixture/.ssh/config" || first == "/fixture/.claude/settings.json" || first == "/fixture/.claude/.credentials.json" => Some(Value::Null),
+                "exec" if first == "sh" && a.get(1).map(from_host).and_then(|v| v.get(2).cloned()) == Some(json!("herdr-usage-env")) => {
+                    Some(json!({"code":0,"stdout":"\u{0}\u{0}fixture\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}","stderr":""}))
+                }
+                "exec" if first == "bash" && a.get(1).map(from_host).and_then(|v| v.get(2).cloned()) == Some(json!("herdr-codex-usage")) => {
+                    Some(json!({"code":127,"stdout":"","stderr":""}))
+                }
                 "readTextFile" => first
                     .as_str()
                     .and_then(|p| p.strip_prefix("/fixture/app/layouts/"))
@@ -1148,4 +1154,27 @@ fn status_bar_shows_the_real_palette_key(cx: &mut TestAppContext) {
     let tree = describe_with_values(cx, &staged, "mods/workspace-status", unbound, None).unwrap();
     assert!(tree.contains("commands"), "unbound hint still offers commands: {tree}");
     assert!(!tree.contains("Shift P"), "unbound hint must not invent a key: {tree}");
+}
+
+#[gpui::test]
+fn status_bar_shows_usage_and_keeps_all_limits_in_narrow_windows(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let staged = Staged::new();
+    let setup = r#"
+        this.width = 320;
+        this.details = 'Claude';
+        Object.assign(this.usage.providers[0], { status: 'ready', windows: [
+            { label: '5h', used: 25, resetsAt: null },
+            { label: '7d', used: 40, resetsAt: null }
+        ] });
+        Object.assign(this.usage.providers[1], { status: 'ready', windows: [
+            { label: '7d', used: 10, resetsAt: null }
+        ] });
+    "#;
+    let tree = describe(cx, &staged, "mods/workspace-status", true, props(), updates("current", "current"), Some(setup)).unwrap();
+    assert!(tree.contains("Claude 7d 60%"), "compact view must show the tightest limit: {tree}");
+    assert!(tree.contains("Codex 7d 90%"), "other provider must remain visible: {tree}");
+    assert!(tree.contains("5h: 75% remaining"), "full limits must remain accessible: {tree}");
+    assert!(tree.contains("Refresh"), "details must expose a keyboard-operable refresh control: {tree}");
+    assert!(!tree.contains("This computer"), "narrow footer must leave room for usage: {tree}");
 }
