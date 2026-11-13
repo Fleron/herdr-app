@@ -25,13 +25,13 @@ export default class Review {
     this.pageHeights = {}; this.pageHeight = 500;
     this.files = []; this.rows = []; this.diffs = {}; this.checks = []; this.reviews = []; this.threads = []; this.events = [];
     this.loading = {}; this.loaded = {}; this.errors = {}; this.notes = []; this.folded = new Set(); this.viewed = new Set();
-    this.treeOpen = true; this.showThreads = true; this.treeWidth = 190; this.bodySize = { width: 800, height: 580 }; this.gAt = 0;
+    this.collapsedFolders = new Set(); this.filteredFolders = new Set(); this.treeKey = null; this.showThreads = true; this.treeWidth = 190; this.bodySize = { width: 800, height: 580 }; this.gAt = 0;
     this.filter = InputState.new({ placeholder: "Filter files…" }); this.activityFilter = InputState.new({ placeholder: "Filter activity…" });
     this.comment = TextareaState.new({ placeholder: "Write a review comment…", rows: 3 });
     for (const input of [this.filter, this.activityFilter, this.comment]) {
-      input.on("focus", (_e, cx) => { this.typing = true; cx.notify(); });
+      input.on("focus", (_e, cx) => { this.typing = true; this.activeInput = input; cx.notify(); });
       input.on("blur", (_e, cx) => { this.typing = false; cx.notify(); });
-      input.on("change", (_e, cx) => { if (input === this.comment) this.saveLater(cx); cx.notify(); });
+      input.on("change", (_e, cx) => { if (input === this.comment) this.saveLater(cx); if (input === this.filter) this.filteredFolders.clear(); cx.notify(); });
     }
     cx.bind_keys([
       { keystroke: "cmd-enter", action: "pr_detail_review", context: "PRReviewDetail" },
@@ -177,6 +177,7 @@ export default class Review {
   }
   changeView(view, cx) {
     this.view = view; this.pageCursor = 0; this.pageKey = null;
+    this.handle.focus();
     if (view === "changes") this.pickFile(this.file, cx);
     if (view === "activity" && !this.events.length) this.loadSection("activity", cx);
     cx.notify();
@@ -188,8 +189,14 @@ export default class Review {
     this.folded.delete(this.file); this.commentTarget = false;
     const path = this.files[this.file].path;
     this.rows = this.diffs[path] ?? [];
-    const visible = this.visibleFiles().indexOf(this.file);
-    if (visible >= 0) this.treeScroll.scroll_to_item(visible + 1);
+    const parts = path.split("/");
+    for (let depth = 1; depth < parts.length; depth++) {
+      const parent = parts.slice(0, depth).join("/");
+      this.collapsedFolders.delete(parent); this.filteredFolders.delete(parent);
+    }
+    this.treeKey = "file:" + path;
+    const visible = this.treeRows().findIndex(row => row.key === this.treeKey);
+    if (visible >= 0) this.treeScroll.scroll_to_item(visible);
     const target = this.target;
     const loadingKey = "diff:" + target.key + ":" + path;
     if (this.diffs[path] || this.loading[loadingKey]) { cx.notify(); return; }
@@ -253,6 +260,64 @@ export default class Review {
     const query = this.filter.value().trim().toLowerCase();
     return this.files.flatMap((file, index) => file.path.toLowerCase().includes(query) ? [index] : []);
   }
+  treeRows() {
+    const query = this.filter.value().trim().toLowerCase(), root = new Map();
+    this.files.forEach((file, index) => {
+      if (!file.path.toLowerCase().includes(query)) return;
+      const parts = file.path.split("/"); let children = root;
+      parts.forEach((name, depth) => {
+        const folder = depth < parts.length - 1, path = parts.slice(0, depth + 1).join("/"), key = (folder ? "folder:" : "file:") + path;
+        if (!children.has(key)) children.set(key, { key, path, name, depth, folder, index, children: new Map(), parent: depth ? "folder:" + parts.slice(0, depth).join("/") : null });
+        children = children.get(key).children;
+      });
+    });
+    const rows = [];
+    const visit = children => {
+      for (const row of [...children.values()].sort((a, b) => Number(b.folder) - Number(a.folder) || a.name.localeCompare(b.name))) {
+        const open = row.folder && !(query ? this.filteredFolders : this.collapsedFolders).has(row.path);
+        rows.push({ ...row, open });
+        if (open) visit(row.children);
+      }
+    };
+    visit(root); return rows;
+  }
+  treeSelection(rows = this.treeRows()) {
+    const path = this.treeKey?.slice(this.treeKey.indexOf(":") + 1);
+    return rows.find(row => row.key === this.treeKey) ?? [...rows].reverse().find(row => row.folder && path?.startsWith(row.path + "/")) ?? rows[0];
+  }
+  selectTree(row, cx) {
+    if (!row) return;
+    this.treeKey = row.key;
+    if (!row.folder) this.pickFile(row.index, cx);
+    this.treeScroll.scroll_to_item(this.treeRows().findIndex(item => item.key === row.key));
+    cx.notify();
+  }
+  toggleFolder(row, cx) {
+    const folders = this.filter.value().trim() ? this.filteredFolders : this.collapsedFolders;
+    if (folders.has(row.path)) folders.delete(row.path);
+    else folders.add(row.path);
+    this.selectTree(row, cx);
+  }
+  navigateTree(e, cx) {
+    const rows = this.treeRows(), row = this.treeSelection(rows), at = rows.indexOf(row), key = e.key;
+    if (!row) return;
+    if (key === "j" || key === "k" || e.keystroke === "ctrl-d" || e.keystroke === "ctrl-u") {
+      const step = key === "j" || key === "k" ? 1 : Math.max(1, Math.floor(this.bodySize.height / 56));
+      this.selectTree(rows[Math.max(0, Math.min(rows.length - 1, at + step * (key === "j" || e.keystroke === "ctrl-d" ? 1 : -1)))], cx);
+    } else if (key === "h") {
+      if (row.open) this.toggleFolder(row, cx);
+      else this.selectTree(rows.find(item => item.key === row.parent), cx);
+    } else if (key === "l" || key === "enter") {
+      if (row.folder) {
+        if (!row.open || key === "enter") this.toggleFolder(row, cx);
+        else this.selectTree(rows[at + 1], cx);
+      } else { this.pickFile(row.index, cx); this.handle.focus(); }
+    } else if (key === "G" || key === "g" && e.modifiers.shift) this.selectTree(rows[rows.length - 1], cx);
+    else if (key === "g") { if (Date.now() - this.gAt < 600) this.selectTree(rows[0], cx); this.gAt = Date.now(); }
+    else if (key === "space" || key === " ") {
+      if (!row.folder) { if (row.index !== this.file) this.selectTree(row, cx); this.toggleViewed(cx); }
+    }
+  }
   moveFile(delta, cx, wrap = false) {
     const files = this.visibleFiles(); if (!files.length) return;
     const at = files.indexOf(this.file), index = at < 0 ? 0 : wrap ? (at + delta + files.length) % files.length : Math.max(0, Math.min(files.length - 1, at + delta));
@@ -291,14 +356,11 @@ export default class Review {
       else return;
       this.pageKey = this.pageItems[this.pageCursor]?.key;
       this.pageScroll.scroll_to_item(this.pageCursor);
-    } else if (key === "space" || key === " ") this.toggleViewed(cx);
-    else if (scope === "tree" && key === "h") this.treeOpen = false;
-    else if (scope === "tree" && (key === "l" || key === "enter")) { this.treeOpen = true; this.pickFile(this.file, cx); this.handle.focus(); }
-    else if (scope === "tree" && (key === "j" || key === "k")) { if (this.treeOpen) this.moveFile(key === "j" ? 1 : -1, cx); }
-    else if (scope === "tree" && (e.keystroke === "ctrl-d" || e.keystroke === "ctrl-u")) this.moveFile(Math.max(1, Math.floor(this.bodySize.height / 64)) * (e.keystroke === "ctrl-d" ? 1 : -1), cx);
+    } else if (scope === "tree" && (["h", "l", "enter", "j", "k", "g", "G", "space", " "].includes(key) || ["ctrl-d", "ctrl-u"].includes(e.keystroke))) this.navigateTree(e, cx);
+    else if (key === "space" || key === " ") this.toggleViewed(cx);
     else if (!shift && (key === "[" || key === "]")) this.moveFile(key === "]" ? 1 : -1, cx, true);
-    else if (key === "G" || key === "g" && shift) scope === "tree" ? this.pickFile(this.visibleFiles().slice(-1)[0] ?? 0, cx) : this.moveCursor(this.rows.length - 1, cx);
-    else if (key === "g") { if (Date.now() - this.gAt < 600) scope === "tree" ? this.pickFile(this.visibleFiles()[0] ?? 0, cx) : this.moveCursor(0, cx); this.gAt = Date.now(); }
+    else if (key === "G" || key === "g" && shift) this.moveCursor(this.rows.length - 1, cx);
+    else if (key === "g") { if (Date.now() - this.gAt < 600) this.moveCursor(0, cx); this.gAt = Date.now(); }
     else if (key === "j" || key === "k") this.moveCursor(this.cursor + (key === "j" ? 1 : -1), cx);
     else if (e.keystroke === "ctrl-d" || e.keystroke === "ctrl-u") this.moveCursor(this.cursor + Math.max(3, Math.floor(this.bodySize.height / 48)) * (e.keystroke === "ctrl-d" ? 1 : -1), cx);
     else if (key === "{" || key === "}" || shift && (key === "[" || key === "]")) {
@@ -383,7 +445,7 @@ export default class Review {
   }
   help() { openOverlay({ mod: "pull-requests", kind: "dialog", width: 550, height: 560, props: { role: "review", mode: "keys" } }); }
   helpView(t) {
-    const entries = [["o / f / a", "Overview / files / activity"], ["j / k · gg / G", "Navigate visible rows"], ["Ctrl+d / Ctrl+u", "Move half a page"], ["⌘Enter / r", "Open review composer"], ["Ctrl+h / Ctrl+l", "Focus files / diff"], ["Ctrl+Shift+h / l", "Narrow / widen files"], ["[ / ] · { / }", "Previous/next file · hunk"], ["Space", "Toggle viewed and fold"], ["V · j/k", "Select a line range"], ["c / i / Enter", "Comment on selected lines"], ["y / ⌘C", "Copy selected context"], ["Esc", "Leave input and retain draft"], ["1 / 2 / 3", "Overview: checks / approvals / threads"]];
+    const entries = [["o / f / a", "Overview / files / activity"], ["j / k · gg / G", "Navigate visible rows"], ["h / l · Enter", "Files: collapse / expand / open"], ["Ctrl+d / Ctrl+u", "Move half a page"], ["⌘Enter / r", "Open review composer"], ["Ctrl+h / Ctrl+l", "Focus files / diff"], ["Ctrl+Shift+h / l", "Narrow / widen files"], ["[ / ] · { / }", "Previous/next file · hunk"], ["Space", "Toggle viewed and fold"], ["V · j/k", "Select a line range"], ["c / i / Enter", "Comment on selected lines"], ["y / ⌘C", "Copy selected context"], ["Esc", "Leave input and retain draft"], ["1 / 2 / 3", "Overview: checks / approvals / threads"]];
     return v_flex().size_full().min_h(0).p(20).gap(12).bg(t.popover).text_color(t.foreground)
       .child(h_flex().items_center().child(div().flex_1().font_semibold().text_size(15).child("Review keyboard shortcuts")).child(button("keys-close", "Close", () => closeOverlay(this.p.overlay), t)))
       .child(v_flex().flex_1().min_h(0).overflow_y_scrollbar().gap(12).children(entries.map(([key, label]) => h_flex().gap(16).text_size(12).child(div().w(150).text_color(t.accent).child(key)).child(div().flex_1().child(label)))));
@@ -484,23 +546,30 @@ export default class Review {
     return this.page(items, t);
   }
   fileTree(t) {
-    const query = this.filter.value().trim().toLowerCase();
-    const files = this.files.map((file, index) => ({ ...file, index })).filter(file => file.path.toLowerCase().includes(query));
-    return v_flex().w(this.treeWidth).h_full().flex_none().min_h(0).track_focus(this.treeHandle).on_key_down((e, cx) => this.navKey(e, cx, "tree")).border_r(1).border_color(t.border).bg(t.background)
-      .child(h_flex().px(12).h(38).flex_none().items_center().gap(5).text_size(11).text_color(t.muted).child(div().child("Files changed")).child(div().flex_1()).child(div().child(this.viewed.size + "/" + this.files.length + " viewed")))
-      .child(Input.new(this.filter).mx(9).h(29).flex_none().px(7).text_size(11).border_1().border_color(t.input).rounded(5).bg(t.background))
-      .child(div().flex_1().min_h(0).relative().child(v_flex().id("pr-files-scroll").absolute().inset_0().overflow_y_scroll().track_scroll(this.treeScroll).p(6).gap(2)
-        .child(Button.new("changed-folder").h(30).px(4).text_size(11).text_color(t.muted).on_click((_e, cx) => { this.treeOpen = !this.treeOpen; this.treeHandle.focus(); cx.notify(); })
-          .child(h_flex().gap(5).items_center().child(svg("mods/workspace-chrome/chevron-" + (this.treeOpen ? "down" : "right") + ".svg").size(12)).child(div().child("Changed files"))))
-        .when(this.treeOpen, el => el.children(files.map(file => Button.new("file-" + file.index).h(32).pl(17).pr(7).rounded(5).bg(file.index === this.file ? t.selected : t.background).hover(s => s.bg(t.hover))
-          .on_click((_e, cx) => { this.pickFile(file.index, cx); this.treeHandle.focus(); })
-          .child(h_flex().w_full().gap(7).items_center()
-            .child(div().w(12).text_size(10).text_color(file.status === "A" ? t.ansi2 : file.status === "D" ? t.ansi1 : t.blocked).child(file.status))
-            .child(div().flex_1().min_w(0).text_size(11).truncate().tooltip(file.oldPath ? file.oldPath + " → " + file.path : file.path).child(file.path))
-            .child(div().text_size(9).text_color(t.ansi2).child("+" + file.added))
-            .child(div().text_size(9).text_color(t.ansi1).child("−" + file.removed))
-            .when(this.viewed.has(file.path), el => el.child(svg("mods/workspace-chrome/check.svg").size(12).text_color(t.ansi2)))))))
-        .when(this.treeOpen && !files.length, el => el.child(div().p(12).text_size(11).text_color(t.muted).child("No matching files"))))
+    const rows = this.treeRows(), selected = this.treeSelection(rows), focused = this.treeHandle.is_focused();
+    return v_flex().w(this.treeWidth).h_full().flex_none().min_w(0).min_h(0).overflow_hidden().track_focus(this.treeHandle).on_key_down((e, cx) => this.navKey(e, cx, "tree")).border_r(1).border_color(t.border).bg(t.background)
+      .child(h_flex().px(9).h(38).flex_none().items_center().gap(5).text_size(11).text_color(t.muted).border_b(2).border_color(focused ? t.accent : t.border)
+        .on_mouse_down("left", (_e, cx) => { this.treeHandle.focus(); cx.notify(); })
+        .child(div().flex_1().min_w(0).truncate().text_color(focused ? t.accent : t.muted).child(focused ? "Files · j/k" : "Files changed"))
+        .child(div().flex_none().text_size(10).child(this.viewed.size + "/" + this.files.length + " viewed")))
+      .child(h_flex().w_full().min_w(0).px(9).h(29).mt(6).flex_none()
+        .child(Input.new(this.filter).flex_1().min_w(0).h_full().px(7).text_size(11).border_1().border_color(t.input).rounded(5).bg(t.background)))
+      .child(div().flex_1().min_h(0).relative().child(v_flex().id("pr-files-scroll").absolute().inset_0().overflow_y_scroll().track_scroll(this.treeScroll).py(6)
+        .children(rows.map(row => {
+          const file = this.files[row.index], current = selected?.key === row.key;
+          return Button.new(row.key).h(28).flex_none().pl(8 + row.depth * 18).pr(6).min_w(0).rounded(5)
+            .border_1().border_color(focused && current ? t.accent : t.background)
+            .bg(current ? focused ? t.selected : t.hover : t.background).hover(s => s.bg(t.hover))
+            .on_click((_e, cx) => { if (row.folder) this.toggleFolder(row, cx); else this.selectTree(row, cx); this.treeHandle.focus(); cx.notify(); })
+            .child(h_flex().w_full().min_w(0).gap(5).items_center()
+              .child(row.folder ? svg("mods/files/chevron-" + (row.open ? "down" : "right") + ".svg").size(12).flex_none().text_color(t.muted) : div().w(12).flex_none())
+              .child(svg("mods/files/" + (row.folder ? "folder" : "file") + ".svg").size(14).flex_none().text_color(t.muted))
+              .child(div().flex_1().min_w(0).text_size(11).truncate().tooltip(row.folder ? row.path : (file.oldPath ? file.oldPath + " → " : "") + row.path + " · +" + file.added + " −" + file.removed).child(row.name))
+              .when(!row.folder, el => el
+                .child(div().flex_none().text_size(10).text_color(file.status === "A" ? t.ansi2 : file.status === "D" ? t.ansi1 : t.blocked).child(file.status))
+                .when(this.viewed.has(row.path), el => el.child(svg("mods/workspace-chrome/check.svg").size(12).flex_none().text_color(t.ansi2)))));
+        }))
+        .when(!rows.length, el => el.child(div().p(12).text_size(11).text_color(t.muted).child("No matching files"))))
         .child(Scrollbar.vertical("pr-files-scroll").absolute().inset_0()));
   }
   inlineComposer(t) {
@@ -538,8 +607,10 @@ export default class Review {
       .child(button("file-reopen", "Reopen file", (_e, cx) => { this.folded.delete(this.file); cx.notify(); }, t));
     const state = this.errors.diff ?? (this.loading["diff:" + this.target.key + ":" + file.path] ? "Loading diff…" : file.binary ? "Binary file · inspect in the terminal" : "No text changes");
     const diff = v_flex().h_full().flex_1().min_w(300).min_h(0)
-      .child(h_flex().px(13).h(38).items_center().gap(8).flex_none().border_b(1).border_color(t.border)
+      .child(h_flex().px(13).h(38).items_center().gap(8).flex_none().border_b(2).border_color(this.handle.is_focused() ? t.accent : t.border)
+        .on_mouse_down("left", (_e, cx) => { this.handle.focus(); cx.notify(); })
         .child(div().flex_1().min_w(0).truncate().text_size(11).font_semibold().tooltip(file.path).child(file.path))
+        .when(this.handle.is_focused(), el => el.child(div().flex_none().text_size(10).text_color(t.accent).child("j/k lines")))
         .child(button("file-viewed", this.viewed.has(file.path) ? "Viewed" : "Mark viewed", (_e, cx) => this.toggleViewed(cx), t)))
       .child(this.folded.has(this.file) ? folded : this.rows.length ? viewport : div().flex_1().p(18).text_size(12).text_color(this.errors.diff ? t.ansi1 : t.muted).child(state))
       .when(this.commentTarget, el => el.child(this.inlineComposer(t)))
@@ -575,7 +646,7 @@ export default class Review {
     return v_flex().id("pr-review").size_full().min_h(0).bg(t.background).text_color(t.foreground).track_focus(this.handle).key_context("PRReviewDetail")
       .on_action("pr_detail_review", (_e, cx) => { cx.stop_propagation(); this.review(cx); })
       .on_action("pr_detail_input", (_e, cx) => { cx.stop_propagation(); if (this.commentTarget) this.addComment(cx); else this.review(cx); })
-      .on_action("pr_detail_normal", (_e, cx) => { cx.stop_propagation(); this.handle.focus(); this.typing = false; this.saveLater(cx); cx.notify(); })
+      .on_action("pr_detail_normal", (_e, cx) => { cx.stop_propagation(); (this.view === "changes" && this.activeInput === this.filter ? this.treeHandle : this.handle).focus(); this.typing = false; this.saveLater(cx); cx.notify(); })
       .on_key_down((e, cx) => this.navKey(e, cx))
       .child(v_flex().px(16).pt(12).pb(9).gap(9).flex_none().border_b(1).border_color(t.border)
         .child(h_flex().items_center().gap(8)

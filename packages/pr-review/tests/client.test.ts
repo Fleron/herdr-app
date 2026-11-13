@@ -18,6 +18,7 @@ function element(type = "div") {
       else if (method === "when") { if (args[0]) args[1](proxy); }
       else if (method === "id") node.id = args[0];
       else if (method === "on_key_down") node.handlers.keyDown = args[0];
+      else if (method === "on_click") node.handlers.click = args[0];
       else if (method === "on_action") node.handlers[args[0]] = args[1];
       return proxy;
     };
@@ -30,9 +31,12 @@ function input(options: any = {}) {
     on: (name: string, callback: any) => { events[name] = callback; }, focus: () => events.focus?.({}, activeCx) };
 }
 function context() {
-  const errors: any[] = [], timers: any[] = [];
+  const errors: any[] = [], timers: any[] = [], handles: any[] = [];
   const cx: any = { errors, timers, notify() {}, stop_propagation() {}, bind_keys() {},
-    focus_handle: () => ({ focused: false, focus() { this.focused = true; }, is_focused() { return this.focused; } }),
+    focus_handle: () => {
+      const handle = { focused: false, focus() { for (const other of handles) other.focused = false; this.focused = true; }, is_focused() { return this.focused; } };
+      handles.push(handle); return handle;
+    },
     spawn: (callback: any) => { callback(cx).catch((error: any) => errors.push(error)); },
     timer: { after: (_ms: number, callback: any) => timers.push(callback), every() {} } };
   activeCx = cx; return cx;
@@ -42,7 +46,7 @@ async function until(check: () => boolean) { for (let n = 0; n < 50 && !check();
 function nodes(node: any): any[] { return [node, ...(node?.children ?? []).flatMap((child: any) => typeof child === "object" ? nodes(child) : [])]; }
 mock.module("gpui-kit", () => ({ div: () => element(), svg: () => element("svg"), View: class {} }));
 mock.module("gpui-base", () => ({
-  h_flex: () => element(), v_flex: () => element(), Button: { new: () => element("button") },
+  h_flex: () => element(), v_flex: () => element(), Button: { new: (id: string) => element("button").id(id) },
   InputState: { new: input }, TextareaState: { new: input },
   Input: { new: () => element("input") }, Textarea: { new: () => element("textarea") },
   Radio: { new: () => element("radio") }, RadioGroup: { new: () => element("radio-group") },
@@ -158,6 +162,88 @@ test("review keyboard handler remains callable after loading a durable draft", a
   expect(typeof review.navKey).toBe("function");
   expect(typeof review.draftKey).toBe("string");
   expect(cx.errors).toEqual([]);
+});
+
+test("folder navigation selects the right diff and makes the active keyboard pane visible", async () => {
+  reviewReplies();
+  const paths = ["src/nested/z.rs", "docs/guide.md", "src/nested/a.rs", "README.md"];
+  helperReplies.set("git.files", { files: paths.map(path => ({ path, status: "M", added: 1, removed: 0 })), nextCursor: null });
+  helperReplies.set("git.diff", (request: any) => ({ rows: [1, 2, 3].map(next => ({ kind: "+", next, text: request.file })), nextCursor: null }));
+  viewProps = { repo, number: 22, target };
+  const runtime = context(), review = new Review();
+  review.init(viewProps, runtime); await until(() => !review.initialLoading);
+  review.changeView("changes", runtime); await until(() => review.rows.length === 3);
+  const press = (key: string, scope = "tree", keystroke = key) => review.navKey({ key, keystroke, modifiers: { shift: false } }, runtime, scope);
+  const tree = () => nodes(review.fileTree(theme).node);
+  const rowIds = () => tree().filter(node => node.type === "button").map(node => node.id);
+  const labels = () => nodes(review.render().node).flatMap(node => node.children.filter((child: any) => typeof child === "string"));
+  expect(rowIds()).toEqual(["folder:docs", "file:docs/guide.md", "folder:src", "folder:src/nested", "file:src/nested/a.rs", "file:src/nested/z.rs", "file:README.md"]);
+  tree().find(node => node.id === "folder:src").handlers.click({}, runtime);
+  expect(rowIds()).not.toContain("folder:src/nested");
+  expect(review.treeHandle.is_focused()).toBe(true);
+  expect(labels()).toContain("Files · j/k");
+  expect(labels()).not.toContain("j/k lines");
+  press("l"); press("l"); press("j");
+  expect(review.treeKey).toBe("file:src/nested/a.rs");
+  expect(review.files[review.file].path).toBe("src/nested/a.rs");
+  await until(() => review.rows[0]?.text === "src/nested/a.rs");
+  press("enter");
+  expect(review.handle.is_focused()).toBe(true);
+  expect(review.treeHandle.is_focused()).toBe(false);
+  expect(labels()).toContain("j/k lines");
+  expect(labels()).not.toContain("Files · j/k");
+  press("j", "diff");
+  expect(review.cursor).toBe(1);
+  expect(review.files[review.file].path).toBe("src/nested/a.rs");
+  press("h", "diff", "ctrl-h"); press("h"); press("h"); press("h"); press("k");
+  expect(review.treeKey).toBe("file:docs/guide.md");
+  expect(review.files[review.file].path).toBe("docs/guide.md");
+  expect(review.treeHandle.is_focused()).toBe(true);
+  press("space");
+  expect(review.viewed.has("docs/guide.md")).toBe(true);
+  expect(review.folded.has(1)).toBe(true);
+  expect(runtime.errors).toEqual([]);
+});
+
+test("file filtering reveals ancestors without losing folder state or original file indices", async () => {
+  reviewReplies();
+  const paths = ["src/b/same.rs", "src/a/same.rs", "src", "README.md"];
+  helperReplies.set("git.files", { files: paths.map(path => ({ path, status: "M", added: 1, removed: 0 })), nextCursor: null });
+  helperReplies.set("git.diff", (request: any) => ({ rows: [{ kind: "+", next: 1, text: request.file }], nextCursor: null }));
+  viewProps = { repo, number: 22, target };
+  const runtime = context(), review = new Review();
+  review.init(viewProps, runtime); await until(() => !review.initialLoading);
+  review.changeView("changes", runtime);
+  const tree = () => nodes(review.fileTree(theme).node);
+  tree().find(node => node.id === "folder:src").handlers.click({}, runtime);
+  review.filter.set_value("A/SAME");
+  expect(tree().filter(node => node.type === "button").map(node => node.id)).toEqual(["folder:src", "folder:src/a", "file:src/a/same.rs"]);
+  tree().find(node => node.id === "folder:src").handlers.click({}, runtime);
+  expect(tree().some(node => node.id === "file:src/a/same.rs")).toBe(false);
+  tree().find(node => node.id === "folder:src").handlers.click({}, runtime);
+  expect(tree().some(node => node.id === "file:src/a/same.rs")).toBe(true);
+  review.filter.set_value("");
+  expect(tree().some(node => node.id === "file:src/a/same.rs")).toBe(false);
+  expect(tree().some(node => node.id === "file:src")).toBe(true);
+  review.filter.set_value("a/same");
+  tree().find(node => node.id === "file:src/a/same.rs").handlers.click({}, runtime);
+  expect(review.file).toBe(1);
+  await until(() => review.rows[0]?.text === "src/a/same.rs");
+  review.filter.focus();
+  const rendered = review.render().node;
+  rendered.handlers.pr_detail_normal({}, runtime);
+  expect(review.typing).toBe(false);
+  expect(review.treeHandle.is_focused()).toBe(true);
+  review.filter.set_value("README");
+  review.navKey({ key: "space", keystroke: "space", modifiers: { shift: false } }, runtime, "tree");
+  expect(review.file).toBe(3);
+  expect(review.viewed.has("README.md")).toBe(true);
+  expect(review.viewed.has("src/a/same.rs")).toBe(false);
+  review.filter.set_value("not present");
+  expect(tree().some(node => node.children.includes("No matching files"))).toBe(true);
+  review.navKey({ key: "j", keystroke: "j", modifiers: { shift: false } }, runtime, "tree");
+  expect(review.file).toBe(3);
+  expect(runtime.errors).toEqual([]);
 });
 
 test("a stale diff response releases its own loading state and cannot block the new target", async () => {

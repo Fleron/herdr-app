@@ -504,7 +504,9 @@ The optional personal PR review package lives in the source distribution at
 layout/tab-bar copies for a PRs panel beside Files/Changes; it is not a shipped
 panel. Its PRs button follows the layout's panel slot; `workspace.panels` controls
 the built-in Files/Changes choices. The `pull-requests` mod has list, review and
-composer roles. Its helper owns GitHub pagination, pinned checkouts, drafts and
+composer roles. The review's resizable changed-file tree groups files into folders;
+`h/l` collapses/expands them, and `Ctrl+h/l` focuses the tree/diff, shown in its
+header. Its helper owns GitHub pagination, pinned checkouts, drafts and
 review receipts; only an explicit
 Submit publishes a review. Restore the recorded original layout to leave it;
 never reset its checkouts or retry an uncertain review write blindly.

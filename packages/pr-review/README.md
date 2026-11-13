@@ -75,8 +75,11 @@ Closing a review tab does not remove its checkout.
 ## Keyboard and clipboard
 
 The accepted review UI includes its keyboard help. Navigation follows Vim's
-`j/k`, `h/l`, `gg/G` and scoped movement commands. Viewed files fold; the changed
-file tree remains on the left and can be resized.
+`j/k`, `h/l`, `gg/G` and scoped movement commands. The resizable file tree groups
+changes into folders. `h/l` collapses/expands folders; Enter toggles a folder or
+opens a file in the diff. Filtering includes matching files and their folders.
+`Ctrl+h` focuses the tree and `Ctrl+l` the diff; the focused header shows a `j/k`
+hint. Escape from the file filter returns to tree navigation. Viewed files fold.
 
 `Cmd+Enter` opens the review composer and focuses its text field. In the composer:
 
